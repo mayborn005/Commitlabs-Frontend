@@ -1,62 +1,100 @@
-// @vitest-environment happy-dom
+import React, { type ReactNode } from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import RouteError from './error';
 
-import React from 'react'
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import Error from './error'
+// Simple ErrorBoundary wrapper to test throwing child behavior in React tree
+interface BoundaryProps {
+  children: ReactNode;
+  onReset?: () => void;
+}
+interface BoundaryState {
+  hasError: boolean;
+  error: (Error & { digest?: string }) | null;
+}
 
-describe('Error Page (src/app/error.tsx)', () => {
-  it('renders the 500 error page with basic elements', () => {
-    const mockReset = vi.fn()
-    render(<Error error={new Error('Test error')} reset={mockReset} />)
-    
-    // Check 500 code, heading, description
-    expect(screen.getByText('500')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Something Went Wrong/i })).toBeInTheDocument()
-    expect(screen.getByText(/We're experiencing technical difficulties/i)).toBeInTheDocument()
-  })
+class TestErrorBoundary extends React.Component<BoundaryProps, BoundaryState> {
+  constructor(props: BoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
 
-  it('displays the error message and digest when provided', () => {
-    const mockReset = vi.fn()
-    const testError = new Error('Test error message')
-    ;(testError as any).digest = 'test-digest-123'
-    
-    render(<Error error={testError} reset={mockReset} />)
-    
-    expect(screen.getByText('Test error message')).toBeInTheDocument()
-    expect(screen.getByText(/Error ID: test-digest-123/i)).toBeInTheDocument()
-  })
+  static getDerivedStateFromError(error: Error): BoundaryState {
+    return { hasError: true, error };
+  }
 
-  it('shows fallback message when error.message is empty', () => {
-    const mockReset = vi.fn()
-    const testError = new Error('')
-    
-    render(<Error error={testError} reset={mockReset} />)
-    
-    expect(screen.getByText('An unexpected error occurred')).toBeInTheDocument()
-  })
+  reset = () => {
+    this.props.onReset?.();
+    this.setState({ hasError: false, error: null });
+  };
 
-  it('calls the reset callback when Try Again button is clicked', () => {
-    const mockReset = vi.fn()
-    render(<Error error={new Error()} reset={mockReset} />)
-    
-    fireEvent.click(screen.getByRole('button', { name: /Try Again/i }))
-    expect(mockReset).toHaveBeenCalledTimes(1)
-  })
+  render() {
+    if (this.state.hasError && this.state.error) {
+      return <RouteError error={this.state.error} reset={this.reset} />;
+    }
+    return this.props.children;
+  }
+}
 
-  it('has a Go Home link that points to /', () => {
-    const mockReset = vi.fn()
-    render(<Error error={new Error()} reset={mockReset} />)
-    
-    const goHomeButton = screen.getByRole('link', { name: /Go Home/i })
-    expect(goHomeButton).toHaveAttribute('href', '/')
-  })
+function ThrowingComponent({ shouldThrow }: { shouldThrow: boolean }) {
+  if (shouldThrow) {
+    throw new Error('Test crash in dashboard child');
+  }
+  return <div>Normal Content</div>;
+}
 
-  it('has an external Report Issue link', () => {
-    const mockReset = vi.fn()
-    render(<Error error={new Error()} reset={mockReset} />)
-    
-    const reportButton = screen.getByRole('link', { name: /Report Issue/i })
-    expect(reportButton).toHaveAttribute('href', 'https://stellar.org/contact')
-  })
-})
+function TestHarness() {
+  const [shouldThrow, setShouldThrow] = React.useState(true);
+  return (
+    <TestErrorBoundary onReset={() => setShouldThrow(false)}>
+      <ThrowingComponent shouldThrow={shouldThrow} />
+    </TestErrorBoundary>
+  );
+}
+
+describe('RouteError component and boundary', () => {
+  it('renders fallback for a throwing child and resets when Try again is clicked', () => {
+    // Suppress React error boundary console output in test
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<TestHarness />);
+
+    expect(screen.getByText('Something went wrong')).toBeDefined();
+    expect(screen.getByText(/Test crash in dashboard child/)).toBeDefined();
+
+    const tryAgainBtn = screen.getByRole('button', { name: /try again/i });
+    expect(tryAgainBtn).toBeDefined();
+
+    fireEvent.click(tryAgainBtn);
+
+    expect(screen.getByText('Normal Content')).toBeDefined();
+    consoleSpy.mockRestore();
+  });
+
+  it('directly invokes reset callback when button is clicked', () => {
+    const resetSpy = vi.fn();
+    const testError = new Error('Database connection failed');
+
+    render(<RouteError error={testError} reset={resetSpy} />);
+
+    expect(screen.getByText('Something went wrong')).toBeDefined();
+    expect(screen.getByText(/Database connection failed/)).toBeDefined();
+
+    const button = screen.getByRole('button', { name: /try again/i });
+    fireEvent.click(button);
+
+    expect(resetSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('sanitizes query parameters from URLs in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+
+    const testError = new Error('Failed to fetch https://horizon.stellar.org/accounts/GA123?secret_token=999');
+    render(<RouteError error={testError} reset={() => {}} />);
+
+    expect(screen.queryByText(/secret_token=999/)).toBeNull();
+    expect(screen.getByText(/https:\/\/horizon\.stellar\.org\/accounts\/GA123/)).toBeDefined();
+
+    vi.unstubAllEnvs();
+  });
+});

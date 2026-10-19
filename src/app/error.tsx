@@ -1,85 +1,56 @@
-'use client'
+'use client';
 
-import { useCallback, useEffect } from 'react'
-import ErrorLayout from '@/components/ErrorLayout'
-import ErrorButton from '@/components/ErrorButton'
-import { reportError } from '@/lib/observability/reportError'
-import styles from './error.module.css'
+import React, { useEffect } from 'react';
+import Link from 'next/link';
 
-interface ErrorProps {
-  error: Error & { digest?: string }
-  reset: () => void
+export interface RouteErrorProps {
+  error: Error & { digest?: string };
+  reset: () => void;
 }
 
-export default function Error({ error, reset }: ErrorProps) {
+export default function RouteError({ error, reset }: RouteErrorProps) {
   useEffect(() => {
-    reportError(error, window.location.pathname)
-  }, [error])
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.error('[RouteError caught error]:', error);
+    }
+  }, [error]);
 
-  const handleRetry = useCallback(() => {
-    reset()
-  }, [reset])
+  const isProduction = process.env.NODE_ENV === 'production';
+  // Strip query params and sensitive URL info from error message
+  const rawMessage = error.message || 'An unexpected application error occurred.';
+  const displayMessage = isProduction
+    ? rawMessage.replace(/https?:\/\/[^\s]+/g, (matched) => matched.split('?')[0])
+    : rawMessage;
 
   return (
-    <ErrorLayout>
-      <div className={styles.container}>
-        {/* Large 500 Display */}
-        <div className={styles.errorCode}>500</div>
-
-        {/* Icon/Illustration */}
-        <div className={styles.icon}>
-          <svg
-            width="120"
-            height="120"
-            viewBox="0 0 120 120"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <circle cx="60" cy="60" r="55" stroke="white" strokeWidth="2" opacity="0.3" />
-            <path
-              d="M60 35V65M60 75V85"
-              stroke="white"
-              strokeWidth="3"
-              strokeLinecap="round"
-            />
-            <circle cx="40" cy="50" r="6" fill="white" opacity="0.6" />
-            <circle cx="80" cy="50" r="6" fill="white" opacity="0.6" />
-          </svg>
+    <section className="container page center">
+      <div className="card error-boundary-card">
+        <div className="error-boundary-icon" aria-hidden="true">
+          !
         </div>
-
-        {/* Message */}
-        <h1 className={styles.title}>Something Went Wrong</h1>
-        <p className={styles.description}>
-          We&apos;re experiencing technical difficulties. Our team has been notified and is working to fix the issue.
+        <h1>Something went wrong</h1>
+        <p className="muted">
+          We encountered an error while loading this page. You can try refreshing the component or return to the dashboard.
         </p>
 
-        {/* Error Details (if available) */}
-        {error && (
-          <div className={styles.errorDetails}>
-            <p className={styles.errorMessage}>
-              {error.message || 'An unexpected error occurred'}
-            </p>
-            {error.digest && (
-              <p className={styles.errorDigest}>Error ID: {error.digest}</p>
-            )}
-          </div>
-        )}
+        <div className="error-boundary-details" role="alert">
+          <b>Error:</b> {displayMessage}
+          {error.digest && <div className="small muted">Digest: {error.digest}</div>}
+        </div>
 
-        {/* Action Buttons */}
-        <div className={styles.actions}>
-          <ErrorButton onClick={handleRetry}>Try Again</ErrorButton>
-          <ErrorButton href="/" variant="secondary">
-            Go Home
-          </ErrorButton>
-          <ErrorButton
-            href="https://stellar.org/contact"
-            variant="secondary"
-            isExternal
-          >
-            Report Issue
-          </ErrorButton>
+        <div className="row center-row">
+          <button type="button" className="btn btn-primary" onClick={() => reset()}>
+            Try again
+          </button>
+          <Link href="/dashboard" className="btn btn-ghost">
+            Back to dashboard
+          </Link>
+          <Link href="/" className="btn btn-ghost">
+            Home
+          </Link>
         </div>
       </div>
-    </ErrorLayout>
-  )
+    </section>
+  );
 }

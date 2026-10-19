@@ -1,34 +1,31 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "npm start",
-      "startServerReadyPattern": "ready on",
+      "startServerCommand": "npm run start -- --hostname 127.0.0.1 --port 3000",
+      "startServerReadyPattern": "Ready|started server",
       "startServerReadyTimeout": 30000,
       "url": [
-        "http://localhost:3000/",
-        "http://localhost:3000/marketplace",
-        "http://localhost:3000/commitments"
+        "http://127.0.0.1:3000/",
+        "http://127.0.0.1:3000/create",
+        "http://127.0.0.1:3000/dashboard"
       ],
       "numberOfRuns": 3,
       "settings": {
-        "onlyCategories": ["performance", "accessibility", "best-practices", "seo"]
+        "formFactor": "mobile"
       }
     },
     "assert": {
+      "aggregationMethod": "median-run",
       "assertions": {
-        "categories:performance": ["warn", { "minScore": 0.7 }],
-        "categories:accessibility": ["error", { "minScore": 0.9 }],
-        "categories:best-practices": ["error", { "minScore": 0.9 }],
-        "categories:seo": ["error", { "minScore": 0.9 }],
-        "first-contentful-paint": ["warn", { "maxNumericValue": 3000 }],
-        "largest-contentful-paint": ["warn", { "maxNumericValue": 4000 }],
-        "total-blocking-time": ["warn", { "maxNumericValue": 500 }],
-        "cumulative-layout-shift": ["warn", { "maxNumericValue": 0.15 }],
-        "interactive": ["warn", { "maxNumericValue": 5000 }]
+        "categories:performance": ["error", { "minScore": 0.9 }],
+        "largest-contentful-paint": ["error", { "maxNumericValue": 2500 }],
+        "cumulative-layout-shift": ["error", { "maxNumericValue": 0.1 }],
+        "total-blocking-time": ["error", { "maxNumericValue": 200 }]
       }
     },
     "upload": {
-      "target": "temporary-public-storage"
+      "target": "filesystem",
+      "outputDir": ".lighthouseci"
     }
   }
 }

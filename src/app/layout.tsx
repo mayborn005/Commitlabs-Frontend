@@ -1,122 +1,36 @@
-import type { Metadata } from 'next'
-import './globals.css'
-import ScrollToTopButton from '@/components/landing-page/ui/ScrollToTop'
-import { ThemeProvider } from '@/components/theme/ThemeProvider'
-import { ToastProvider } from '@/components/toast/ToastProvider'
-import { CommandPaletteProvider } from '@/components/CommandPalette'
-import { NetworkMismatchBanner } from '@/components/wallet/NetworkMismatchBanner'
-import { Inter, Roboto_Mono } from 'next/font/google'
-import { MotionProvider } from "@/components/MotionProvider"
-import { WebVitalsReporter } from "@/components/perf/WebVitalsReporter"
-import { AppShellConnectionStatus } from '@/components/shell/AppShellConnectionStatus'
-import { WalletProvider } from '@/components/auth/WalletProvider'
-
-const inter = Inter({
-  subsets: ['latin'],
-  display: 'swap',
-  variable: '--font-inter',
-})
-
-const robotoMono = Roboto_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  display: 'swap',
-  variable: '--font-roboto',
-})
+import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import './globals.css';
+import { WalletProvider } from '@/components/WalletProvider';
+import { Header } from '@/components/Header';
+import { Footer } from '@/components/Footer';
+import { WalletNotice } from '@/components/WalletNotice';
 
 export const metadata: Metadata = {
   title: 'CommitLabs - Liquidity as a Commitment',
-  description: 'Transform passive liquidity into enforceable, attestable, and composable on-chain commitments',
-  keywords: 'liquidity, commitment, blockchain, DeFi, NFT, Stellar, Soroban',
-  authors: [{ name: 'CommitLabs' }],
-  creator: 'CommitLabs',
-  publisher: 'CommitLabs',
-  openGraph: {
-    title: 'CommitLabs - Liquidity as a Commitment',
-    description: 'Transform passive liquidity into enforceable, attestable, and composable on-chain commitments',
-    url: 'https://commitlabs.com',
-    siteName: 'CommitLabs',
-    images: [
-      {
-        url: '/og-image.jpg',
-        width: 1200,
-        height: 630,
-        alt: 'CommitLabs - Liquidity as a Commitment',
-      },
-    ],
-    locale: 'en_US',
-    type: 'website',
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'CommitLabs - Liquidity as a Commitment',
-    description: 'Transform passive liquidity into enforceable, attestable, and composable on-chain commitments',
-    images: ['/og-image.jpg'],
-  },
-  robots: {
-    index: true,
-    follow: true,
-    googleBot: {
-      index: true,
-      follow: true,
-      'max-video-preview': -1,
-      'max-image-preview': 'large',
-      'max-snippet': -1,
-    },
-  },
-  ...(process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION ? {
-    verification: {
-      google: process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION,
-    },
-  } : {}),
-}
+  description:
+    'Turn passive liquidity into enforceable, attestable on-chain commitments on Stellar Soroban.',
+};
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // The middleware sets a per-request nonce (see src/middleware.ts): it goes
+  // out on the CSP response header and comes back on the request as `x-nonce`.
+  // Reading a request header here also opts every route into dynamic
+  // rendering, which is required — with static prerendering Next.js cannot
+  // stamp the nonce onto its own <script> tags and the browser would block
+  // them under `script-src 'strict-dynamic'`.
+  const nonce = headers().get('x-nonce') ?? undefined;
+
   return (
-    <html
-      lang="en"
-      suppressHydrationWarning
-      className={['scroll-smooth', inter.variable, robotoMono.variable].join(' ')}
-    >
-      <head>
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
-              '@context': 'https://schema.org',
-              '@type': 'WebSite',
-              name: 'CommitLabs',
-              description: 'Transform passive liquidity into enforceable, attestable, and composable on-chain commitments',
-              url: 'https://commitlabs.com',
-              publisher: {
-                '@type': 'Organization',
-                name: 'CommitLabs',
-                url: 'https://commitlabs.com',
-              },
-            }),
-          }}
-        />
-      </head>
+    <html lang="en" nonce={nonce}>
       <body>
-        <WebVitalsReporter />
-        <a href="#main-content" className="skip-link">Skip to main content</a>
-        <ThemeProvider>
-          <WalletProvider>
-            <MotionProvider>
-              <ToastProvider>
-                <NetworkMismatchBanner />
-                <AppShellConnectionStatus>{children}</AppShellConnectionStatus>
-                <ScrollToTopButton />
-                <CommandPaletteProvider />
-              </ToastProvider>
-            </MotionProvider>
-          </WalletProvider>
-        </ThemeProvider>
+        <WalletProvider>
+          <Header />
+          <WalletNotice />
+          <main id="main-content">{children}</main>
+          <Footer />
+        </WalletProvider>
       </body>
     </html>
-  )
+  );
 }

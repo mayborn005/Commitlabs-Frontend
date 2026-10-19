@@ -1,404 +1,353 @@
-"use client";
+'use client';
 
-import { useState, useMemo, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import CreateCommitmentStepSelectType from "@/components/CreateCommitmentStepSelectType";
-import CreateCommitmentStepConfigure from "@/components/CreateCommitmentStepConfigure";
-import CreateCommitmentStepReview from "@/components/CreateCommitmentStepReview";
-import CommitmentCreatedModal from "@/components/modals/CommitmentCreatedModal";
-import { buildExplorerUrl, openExplorerUrl } from "@/utils/explorerLinks";
-import { useWallet } from "@/hooks/useWallet";
-import { AppShellLayout } from "@/components/shell/AppShellLayout";
-import { useDraftPersistence, type DraftState } from "@/hooks/useDraftPersistence";
-import ResumeDraftPrompt from "@/components/create/ResumeDraftPrompt";
-import { useGuidedTour } from "@/hooks/useGuidedTour";
-import { GuidedTour } from "@/components/onboarding/GuidedTour";
-import { HelpCircle } from "lucide-react";
-import { usePrefillFromCommitment } from "@/hooks/usePrefillFromCommitment";
-import { type CommitmentPreset } from "@/components/create/commitmentPresets";
+import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
+import {
+  TYPES,
+  fmt,
+  loadCommitments,
+  newId,
+  saveCommitments,
+  specFor,
+  type Commitment,
+  type CommitmentType,
+} from '@/lib/commitments';
+import { useWallet } from '@/components/WalletProvider';
+import { ESCROW_CONTRACT_ID, explorerContractUrl, config } from '@/lib/config';
 
-type CommitmentType = "safe" | "balanced" | "aggressive";
+const ASSETS = ['USDC', 'XLM', 'EURC'];
+const STEP_LABELS = ['Type', 'Configure', 'Review', 'Done'];
 
-// Generate a random commitment ID (in production, this comes from the blockchain)
-function generateCommitmentId(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let id = "CMT-";
-  for (let i = 0; i < 7; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
+export default function CreatePage() {
+  const { address } = useWallet();
+  const [step, setStep] = useState(0);
+  const [type, setType] = useState<CommitmentType>('balanced');
+  const [asset, setAsset] = useState('USDC');
+  const [amount, setAmount] = useState('1000');
+  const [days, setDays] = useState('30');
+  const [agree, setAgree] = useState(false);
+  const [created, setCreated] = useState<Commitment | null>(null);
+  const [amountTouched, setAmountTouched] = useState(false);
+  const [daysTouched, setDaysTouched] = useState(false);
+  const [attempted, setAttempted] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const typeRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const amountRef = useRef<HTMLInputElement>(null);
+  const daysRef = useRef<HTMLInputElement>(null);
+  const prevStep = useRef(0);
+
+  // On step change: move focus to the new heading and announce it. Comparing with the
+  // previous step makes this a no-op on mount and on strict-mode effect replays.
+  useEffect(() => {
+    if (prevStep.current === step) return;
+    prevStep.current = step;
+    headingRef.current?.focus();
+    setAnnouncement(`Step ${step + 1} of ${STEP_LABELS.length}: ${STEP_LABELS[step]}`);
+  }, [step]);
+
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('type');
+    if (t === 'safe' || t === 'balanced' || t === 'aggressive') {
+      setType(t);
+      setDays(String(specFor(t).minDays));
+    }
+  }, []);
+
+  const spec = specFor(type);
+  const amt = Number(amount);
+  const dur = Number(days);
+  const amountErr = !Number.isFinite(amt) || amt <= 0 ? 'Enter an amount greater than zero.' : null;
+  const daysErr =
+    !Number.isInteger(dur) || dur < spec.minDays
+      ? `Minimum lock for ${spec.name} is ${spec.minDays} days.`
+      : dur > 365
+        ? 'Maximum lock is 365 days.'
+        : null;
+  const valid = !amountErr && !daysErr;
+  const projected = valid ? (amt * (spec.apy / 100) * dur) / 365 : 0;
+
+  function pickType(t: CommitmentType) {
+    setType(t);
+    const min = specFor(t).minDays;
+    if (!Number.isInteger(Number(days)) || Number(days) < min) setDays(String(min));
   }
-  return id;
-}
 
-export default function CreateCommitment() {
-  const router = useRouter();
-  const { address: ownerAddress } = useWallet();
-  const { draft, saveDraft, clearDraft } = useDraftPersistence();
-  const prefill = usePrefillFromCommitment();
-  const [showResumePrompt, setShowResumePrompt] = useState(false);
-  const [step, setStep] = useState(1);
-  const [initialFocusField, setInitialFocusField] = useState<string | null>(null);
-  const walletAddress = ownerAddress;
+  function submit() {
+    const c: Commitment = {
+      id: newId(),
+      type,
+      asset,
+      amount: amt,
+      durationDays: dur,
+      maxLoss: spec.maxLoss,
+      penalty: spec.penalty,
+      apy: spec.apy,
+      createdAt: Date.now(),
+      status: 'active',
+      owner: address,
+      txHash: null,
+    };
+    saveCommitments([c, ...loadCommitments().items]);
+    setCreated(c);
+    setStep(3);
+  }
 
-  const {
-    isActive: tourActive,
-    currentStepIndex,
-    currentStepConfig,
-    totalSteps,
-    nextStep,
-    prevStep,
-    skipTour,
-    startTour,
-  } = useGuidedTour({
-    activeWizardStep: step as 1 | 2 | 3,
-    setWizardStep: (s) => setStep(s),
-    walletAddress,
-    onSelectDefaultType: () => {
-      if (!selectedType) {
-        handleSelectType("balanced");
-      }
-    },
-  });
-  const [selectedType, setSelectedType] = useState<CommitmentType | null>(null);
-  const [commitmentType, setCommitmentType] =
-    useState<CommitmentType>("balanced");
-  const [amount, setAmount] = useState<string>("");
-  const [asset, setAsset] = useState<string>("XLM");
-  const [durationDays, setDurationDays] = useState<number>(90);
-  const [maxLossPercent, setMaxLossPercent] = useState<number>(100);
-  const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [commitmentId, setCommitmentId] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  function onTypeKeyDown(e: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    let next = index;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (index + 1) % TYPES.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp')
+      next = (index - 1 + TYPES.length) % TYPES.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = TYPES.length - 1;
+    else return;
+    e.preventDefault();
+    pickType(TYPES[next].id);
+    typeRefs.current[next]?.focus();
+  }
 
-  // In production this would come from the connected wallet hook.
-  // Passed as undefined while wallet integration is pending; the fund
-  // API accepts an optional callerAddress and validates it on-chain.
-  const callerAddress: string | undefined = undefined;
-
-  useEffect(() => {
-    if (draft) {
-      setShowResumePrompt(true);
+  function goReview() {
+    if (!valid) {
+      setAttempted(true);
+      (amountErr ? amountRef : daysRef).current?.focus();
+      return;
     }
-  }, [draft]);
-
-  // When a source commitment is loaded via ?sourceId=, prefill the wizard fields
-  // and skip straight to step 2 so the user can review / adjust the copied parameters.
-  // Identity-bound fields (id, ownership, on-chain state) are NOT copied — only
-  // configurable parameters that the user is free to edit.
-  useEffect(() => {
-    if (!prefill) return;
-    setSelectedType(prefill.commitmentType);
-    setCommitmentType(prefill.commitmentType);
-    setAmount(prefill.amount);
-    setAsset(prefill.asset);
-    setDurationDays(prefill.durationDays);
-    setMaxLossPercent(prefill.maxLossPercent);
-    // Skip type-selection step — type is already chosen from the source.
     setStep(2);
-    setShowResumePrompt(false);
-  }, [prefill]);
+  }
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("startTour") === "true") {
-        startTour();
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, document.title, cleanUrl);
-      }
-    }
-  }, [startTour]);
-
-  const handleResumeDraft = () => {
-    if (draft) {
-      setStep(draft.step);
-      setSelectedType(draft.selectedType);
-      setCommitmentType(draft.commitmentType);
-      setAmount(draft.amount);
-      setAsset(draft.asset);
-      setDurationDays(draft.durationDays);
-      setMaxLossPercent(draft.maxLossPercent);
-      setShowResumePrompt(false);
-    }
-  };
-
-  const handleStartFresh = () => {
-    clearDraft();
-    setShowResumePrompt(false);
-  };
-
-  useEffect(() => {
-    const currentDraft: DraftState = {
-      step,
-      selectedType,
-      commitmentType,
-      amount,
-      asset,
-      durationDays,
-      maxLossPercent,
-    };
-    saveDraft(currentDraft);
-  }, [step, selectedType, commitmentType, amount, asset, durationDays, maxLossPercent, saveDraft]);
-
-  // Build review data from actual configured values
-  const getReviewData = () => {
-    const typeLabelMap: Record<string, string> = {
-      safe: "Safe Commitment",
-      balanced: "Balanced Commitment",
-      aggressive: "Aggressive Commitment",
-    };
-    const yieldMap: Record<string, string> = {
-      safe: "5.2% APY",
-      balanced: "12.5% APY",
-      aggressive: "45.0% APY",
-    };
-    const start = new Date();
-    const end = new Date(start);
-    end.setDate(end.getDate() + durationDays);
-    return {
-      typeLabel: typeLabelMap[selectedType ?? "balanced"] ?? "Commitment",
-      amount: amount || "0",
-      asset,
-      durationDays,
-      maxLossPercent,
-      earlyExitPenalty,
-      estimatedFees,
-      estimatedYield: yieldMap[selectedType ?? "balanced"] ?? "—",
-      commitmentStart: "Immediately",
-      commitmentEnd: end.toLocaleDateString(),
-    };
-  };
-
-  // Mock available balance - in real app, this would come from wallet/API
-  const availableBalance = 10000;
-
-  // Derived values
-  const earlyExitPenalty = useMemo(() => {
-    const penalty =
-      commitmentType === "aggressive"
-        ? 5
-        : commitmentType === "balanced"
-          ? 3
-          : 2;
-    return `${((Number(amount) || 0) * penalty) / 100} ${asset}`;
-  }, [amount, asset, commitmentType]);
-
-  const estimatedFees = useMemo(() => `0.00 ${asset}`, [asset]);
-
-  const amountError = useMemo(() => {
-    const numAmount = Number(amount);
-    if (amount && numAmount <= 0) return "Amount must be greater than 0";
-    if (numAmount > availableBalance) return "Amount exceeds available balance";
-    return undefined;
-  }, [amount, availableBalance]);
-
-  const isStep2Valid = useMemo(() => {
-    const numAmount = Number(amount);
-    return (
-      numAmount > 0 &&
-      numAmount <= availableBalance &&
-      durationDays >= 1 &&
-      durationDays <= 365 &&
-      maxLossPercent >= 0 &&
-      maxLossPercent <= 100
-    );
-  }, [amount, availableBalance, durationDays, maxLossPercent]);
-
-  const maxLossWarning = maxLossPercent > 80;
-
-  // Step Handlers
-  const handleSelectType = (type: CommitmentType) => {
-    setSelectedType(type);
-    setCommitmentType(type);
-  };
-
-  const handleApplyPreset = (preset: CommitmentPreset) => {
-    setSelectedType(preset.type);
-    setCommitmentType(preset.type);
-    setDurationDays(preset.durationDays);
-    setMaxLossPercent(preset.maxLossPercent);
-  };
-
-  const handleNextStep = () => {
-    if (step < 3) {
-      setStep(step + 1);
-    }
-  };
-
-  // Navigation handlers
-  // Note: These control the wizard step flow
-  const handleBack = () => {
-    if (step > 1) {
-      setStep(step - 1);
-    } else {
-      router.push("/");
-    }
-  };
-
-  const handleSubmit = () => {
-    setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
-      const newCommitmentId = generateCommitmentId();
-      setCommitmentId(newCommitmentId);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("commitlabs:created-commitment", "true");
-      }
-      setShowSuccessModal(true);
-      clearDraft();
-    }, 2000);
-  };
-
-  const handleViewCommitment = () => {
-    const numericId = commitmentId.split("-")[1] || "1";
-    router.push(`/commitments/${numericId}`);
-  };
-
-  const handleCreateAnother = () => {
-    setShowSuccessModal(false);
-    setSelectedType(null);
-    setStep(1);
-    setCommitmentId("");
-    setCommitmentType("balanced");
-    setAmount("");
-    setAsset("XLM");
-    setDurationDays(90);
-    setMaxLossPercent(100);
-    clearDraft();
-  };
-
-  const handleCloseModal = () => {
-    setShowSuccessModal(false);
-    router.push("/commitments");
-  };
-
-  // Fund-later: close the success modal and go to the detail page so the
-  // user can fund the escrow from there at any time.
-  const handleFundLater = () => {
-    setShowSuccessModal(false);
-    const numericId = commitmentId.split("-")[1] || "1";
-    router.push(`/commitments/${numericId}`);
-  };
-
-  const handleViewOnExplorer = () => {
-    openExplorerUrl("tx", commitmentId, "testnet");
-  };
-
-  const commitmentExplorerUrl = buildExplorerUrl("tx", commitmentId, "testnet");
-
-  const handleEditStep = (targetStep: 1 | 2, fieldId?: string) => {
-    if (fieldId) {
-      setInitialFocusField(fieldId);
-    } else {
-      setInitialFocusField(null);
-    }
-    setStep(targetStep);
-  };
+  const showAmountErr = amountErr && (attempted || amountTouched);
+  const showDaysErr = daysErr && (attempted || daysTouched);
+  const describedBy = (hint: string, err: string | boolean | null | undefined) =>
+    err ? `${hint} ${hint}-err` : hint;
 
   return (
-    <AppShellLayout>
-      <main id="main-content" className="flex flex-col flex-1 relative">
-        {/* Duplicate-mode banner: shown when the wizard was opened from an existing commitment */}
-        {prefill && (
-          <div
-            role="status"
-            aria-live="polite"
-            data-testid="duplicate-prefill-banner"
-            className="mx-auto mb-4 max-w-2xl rounded-xl border border-[rgba(0,212,255,0.3)] bg-[rgba(0,212,255,0.05)] px-5 py-3 text-sm text-[#0ff0fc]"
+    <section className="container page narrow">
+      <h1>Create a commitment</h1>
+      <ol className="steps" aria-label="Progress">
+        {STEP_LABELS.map((l, i) => (
+          <li
+            key={l}
+            className={i === step ? 'on' : i < step ? 'done' : ''}
+            aria-current={i === step ? 'step' : undefined}
           >
-            Duplicating from an existing commitment — all fields are pre-filled and fully editable.
+            <span aria-hidden="true">{i + 1}</span> {l}
+            {i < step && <em className="sr-only"> (completed)</em>}
+          </li>
+        ))}
+      </ol>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
+
+      {step === 0 && (
+        <div className="stack">
+          <h2 ref={headingRef} tabIndex={-1} id="type-heading">
+            Choose a commitment type
+          </h2>
+          <div className="grid3" role="radiogroup" aria-labelledby="type-heading">
+            {TYPES.map((t, i) => (
+              <button
+                key={t.id}
+                ref={(el) => {
+                  typeRefs.current[i] = el;
+                }}
+                type="button"
+                role="radio"
+                aria-checked={type === t.id}
+                tabIndex={type === t.id ? 0 : -1}
+                className={`card pick ${type === t.id ? 'selected' : ''}`}
+                onClick={() => pickType(t.id)}
+                onKeyDown={(e) => onTypeKeyDown(e, i)}
+              >
+                <h3>{t.name}</h3>
+                <p className="muted">{t.tagline}</p>
+                <b>{t.apy}% APY</b>
+              </button>
+            ))}
           </div>
-        )}
+          <div className="row end">
+            <button className="btn btn-primary" onClick={() => setStep(1)}>
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
 
-        {showResumePrompt && draft && (
-          <ResumeDraftPrompt
-            draft={draft}
-            onResume={handleResumeDraft}
-            onStartFresh={handleStartFresh}
-          />
-        )}
+      {step === 1 && (
+        <div className="card stack">
+          <h2 ref={headingRef} tabIndex={-1}>
+            Configure
+          </h2>
+          <label>
+            Asset
+            <select value={asset} onChange={(e) => setAsset(e.target.value)}>
+              {ASSETS.map((a) => (
+                <option key={a}>{a}</option>
+              ))}
+            </select>
+          </label>
+          <div className="field">
+            <label>
+              Amount
+              <input
+                ref={amountRef}
+                inputMode="decimal"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                onBlur={() => setAmountTouched(true)}
+                aria-invalid={!!showAmountErr}
+                aria-describedby={describedBy('amount', showAmountErr)}
+              />
+            </label>
+            <small id="amount" className="muted">
+              Enter a number greater than zero.
+            </small>
+            {showAmountErr && (
+              <small id="amount-err" className="err">
+                {amountErr}
+              </small>
+            )}
+          </div>
+          <div className="field">
+            <label>
+              Lock duration (days)
+              <input
+                ref={daysRef}
+                inputMode="numeric"
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+                onBlur={() => setDaysTouched(true)}
+                aria-invalid={!!showDaysErr}
+                aria-describedby={describedBy('days', showDaysErr)}
+              />
+            </label>
+            <small id="days" className="muted">
+              Whole days, from {spec.minDays} to 365.
+            </small>
+            {showDaysErr && (
+              <small id="days-err" className="err">
+                {daysErr}
+              </small>
+            )}
+          </div>
+          <ul className="kv">
+            <li>
+              <span>Max loss tolerance</span>
+              <b>{spec.maxLoss}%</b>
+            </li>
+            <li>
+              <span>Early exit penalty</span>
+              <b>{spec.penalty}%</b>
+            </li>
+            <li>
+              <span>Projected yield</span>
+              <b>
+                {fmt(projected)} {asset}
+              </b>
+            </li>
+          </ul>
+          <div className="row between">
+            <button className="btn btn-ghost" onClick={() => setStep(0)}>
+              Back
+            </button>
+            <button className="btn btn-primary" onClick={goReview}>
+              Review
+            </button>
+          </div>
+        </div>
+      )}
 
-        {!showResumePrompt && step === 1 && (
-          <CreateCommitmentStepSelectType
-            selectedType={selectedType}
-            onSelectType={handleSelectType}
-            onNext={handleNextStep}
-            onBack={handleBack}
-            onApplyPreset={handleApplyPreset}
-            {...(initialFocusField ? { initialFocusField } : {})}
-          />
-        )}
+      {step === 2 && (
+        <div className="card stack">
+          <h2 ref={headingRef} tabIndex={-1}>
+            Review
+          </h2>
+          <ul className="kv">
+            <li>
+              <span>Type</span>
+              <b>{spec.name}</b>
+            </li>
+            <li>
+              <span>Principal</span>
+              <b>
+                {fmt(amt)} {asset}
+              </b>
+            </li>
+            <li>
+              <span>Duration</span>
+              <b>{dur} days</b>
+            </li>
+            <li>
+              <span>Target APY</span>
+              <b>{spec.apy}%</b>
+            </li>
+            <li>
+              <span>Projected yield</span>
+              <b>
+                {fmt(projected)} {asset}
+              </b>
+            </li>
+            <li>
+              <span>Early exit penalty</span>
+              <b>
+                {spec.penalty}% ({fmt((amt * spec.penalty) / 100)} {asset})
+              </b>
+            </li>
+          </ul>
+          <label className="check">
+            <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+            I understand leaving early applies the penalty and these terms cannot be changed.
+          </label>
+          <p className="muted small">
+            Demo mode: the commitment is recorded in this browser. On-chain submission to the{' '}
+            {config.networkDetails.label.toLowerCase()} escrow contract is enabled once a contract ID is configured
+            {ESCROW_CONTRACT_ID ? '.' : ' (none set in this deployment).'}
+          </p>
+          <div className="row between">
+            <button className="btn btn-ghost" onClick={() => setStep(1)}>
+              Back
+            </button>
+            <button className="btn btn-primary" disabled={!agree} onClick={submit}>
+              Create commitment
+            </button>
+          </div>
+        </div>
+      )}
 
-        {!showResumePrompt && step === 2 && (
-          <CreateCommitmentStepConfigure
-            amount={amount}
-            asset={asset}
-            availableBalance={availableBalance}
-            durationDays={durationDays}
-            maxLossPercent={maxLossPercent}
-            earlyExitPenalty={earlyExitPenalty}
-            estimatedFees={estimatedFees}
-            isValid={isStep2Valid}
-            ownerAddress={ownerAddress}
-            commitmentType={commitmentType}
-            onChangeAmount={setAmount}
-            onChangeAsset={setAsset}
-            onChangeDuration={setDurationDays}
-            onChangeMaxLoss={setMaxLossPercent}
-            onBack={handleBack}
-            onNext={handleNextStep}
-            amountError={amountError}
-            maxLossWarning={maxLossWarning}
-            {...(initialFocusField ? { initialFocusField } : {})}
-          />
-        )}
-
-        {!showResumePrompt && step === 3 && selectedType && (
-          <>
-            <CreateCommitmentStepReview
-              {...getReviewData()}
-              isSubmitting={isSubmitting}
-              onBack={handleBack}
-              onSubmit={handleSubmit}
-              onEditStep={handleEditStep}
-            />
-
-            <CommitmentCreatedModal
-              isOpen={showSuccessModal}
-              commitmentId={commitmentId}
-              {...(callerAddress ? { callerAddress } : {})}
-              onViewCommitment={handleViewCommitment}
-              onCreateAnother={handleCreateAnother}
-              onClose={handleCloseModal}
-              onFundLater={handleFundLater}
-              {...(commitmentExplorerUrl ? { onViewOnExplorer: handleViewOnExplorer } : {})}
-            />
-          </>
-        )}
-
-        {/* Help button to re-launch tour */}
-        <button
-          type="button"
-          onClick={startTour}
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-full border border-[rgba(0,212,255,0.4)] bg-[rgba(10,10,11,0.9)] px-4 py-2.5 text-sm font-semibold text-[#0ff0fc] shadow-[0_0_15px_rgba(0,212,255,0.2)] backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:border-[rgba(0,212,255,0.8)] hover:shadow-[0_0_20px_rgba(0,212,255,0.5)] focus:outline-none focus:ring-2 focus:ring-[#0ff0fc]"
-          aria-label="Start guided tour"
-          title="Start guided tour"
-          data-testid="tour-help-button"
-        >
-          <HelpCircle size={18} />
-          <span>Tour Guide</span>
-        </button>
-
-        {/* Guided Tour Tooltip Controller */}
-        <GuidedTour
-          isActive={tourActive}
-          currentStepIndex={currentStepIndex}
-          currentStepConfig={currentStepConfig}
-          totalSteps={totalSteps}
-          onNext={nextStep}
-          onBack={prevStep}
-          onSkip={skipTour}
-        />
-      </main>
-    </AppShellLayout>
+      {step === 3 && created && (
+        <div className="card stack center">
+          <div className="check-big" aria-hidden="true">
+            &#10003;
+          </div>
+          <h2 ref={headingRef} tabIndex={-1}>
+            Commitment created
+          </h2>
+          <p className="muted">
+            {created.id} &middot; {fmt(created.amount)} {created.asset} for {created.durationDays}{' '}
+            days
+          </p>
+          {ESCROW_CONTRACT_ID && (
+            <a href={explorerContractUrl(ESCROW_CONTRACT_ID)} target="_blank" rel="noreferrer">
+              View escrow contract on Stellar Expert
+            </a>
+          )}
+          <div className="row center-row">
+            <Link href="/dashboard" className="btn btn-primary">
+              Go to dashboard
+            </Link>
+            <button
+              className="btn btn-ghost"
+              onClick={() => {
+                setStep(0);
+                setAgree(false);
+                setCreated(null);
+              }}
+            >
+              Create another
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
